@@ -227,6 +227,7 @@ export default function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastCloudUpdate, setLastCloudUpdate] = useState<string | null>(null);
   const [isRealtimeActive, setIsRealtimeActive] = useState(false);
+  const [hasLoadedFromCloud, setHasLoadedFromCloud] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'general' | 'templates' | 'supabase'>('general');
   const [sqlCopied, setSqlCopied] = useState(false);
   const [manualUrl, setManualUrl] = useState(() => {
@@ -238,7 +239,10 @@ export default function App() {
 
   // 1. Initial State Loading from Supabase
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      setHasLoadedFromCloud(true);
+      return;
+    }
 
     let active = true;
 
@@ -284,6 +288,7 @@ export default function App() {
           
           setLastCloudUpdate(new Date().toISOString());
           setSyncStatus('synced');
+          setHasLoadedFromCloud(true);
           return; // Retain local state
         }
 
@@ -300,7 +305,20 @@ export default function App() {
           finalDebts = loadedState.debts || [];
           finalExchangeRate = loadedState.exchangeRate || DEFAULT_EXCHANGE_RATE;
           finalWhatsappPhone = loadedState.whatsappPhone || '584120000000';
-          finalProducts = loadedState.products || [];
+          
+          // Triple-redundancy product loading system:
+          // 1. Primary: Load from relational postgres "productos" table if successfully fetched and has products
+          // 2. Secondary Fallback: Load from state JSON fallback if relational is empty or null
+          // 3. Last Line of Defense: If both cloud sources are empty/null, retain the existing local storage products to prevent data loss
+          if (dbProducts !== null && dbProducts.length > 0) {
+            finalProducts = dbProducts;
+          } else if (loadedState.products && loadedState.products.length > 0) {
+            console.log('[Supabase Sync fallback] Using fallback products from state JSON...', loadedState.products.length);
+            finalProducts = loadedState.products;
+          } else {
+            console.log('[Supabase Sync last-line-defense] Retaining local storage products to prevent data loss...');
+            finalProducts = stateRef.current.products;
+          }
         } else if (cloudData && localTime > cloudTime) {
           // Local is newer: push local state to Supabase
           console.log('[Supabase Sync] Local state is newer. Pushing newer local state to Supabase...');
@@ -312,17 +330,15 @@ export default function App() {
           }
           setLastCloudUpdate(new Date().toISOString());
           setSyncStatus('synced');
+          setHasLoadedFromCloud(true);
           return; // Retain local state
-        }
-
-        // Direct DB products from postgres take precedence if successfully fetched and not empty,
-        // or if we loaded an official cloud state.
-        if (dbProducts !== null) {
-          if (dbProducts.length > 0) {
+        } else {
+          // If there is no cloudData, but we fetched products from Supabase successfully
+          if (dbProducts !== null && dbProducts.length > 0) {
             finalProducts = dbProducts;
-          } else if (cloudData !== null) {
-            // DB is empty, but we loaded state, which means they actually have no products
-            finalProducts = [];
+          } else {
+            // Keep local products as defense if dbProducts is empty
+            finalProducts = stateRef.current.products;
           }
         }
 
@@ -341,6 +357,7 @@ export default function App() {
         setState(loadedState);
         setLastCloudUpdate(cloudData?.updatedAt || new Date().toISOString());
         setSyncStatus('synced');
+        setHasLoadedFromCloud(true);
       } catch (error: any) {
         const errMsg = error?.message || String(error);
         const isNetworkOrAuth = errMsg.includes('fetch') || errMsg.includes('Network') || errMsg.includes('Failed to fetch') || errMsg.includes('network');
@@ -353,6 +370,7 @@ export default function App() {
         if (active) {
           setSyncStatus('error');
           setSyncError(error?.message || String(error));
+          setHasLoadedFromCloud(true);
         }
       }
     }
@@ -458,6 +476,7 @@ export default function App() {
   // 3. Debounced Cloud Saving
   useEffect(() => {
     if (!isSupabaseConfigured || isCatalogMode) return;
+    if (!hasLoadedFromCloud) return; // Prevent saving local state before the initial sync from Supabase has completed
 
     // Check if we should skip this save (e.g., if it was caused by a cloud pull)
     if (skipNextSaveRef.current) {
@@ -489,7 +508,7 @@ export default function App() {
     }, 1500); // 1.5 seconds debounce
 
     return () => clearTimeout(timeoutId);
-  }, [state, isCatalogMode]);
+  }, [state, isCatalogMode, hasLoadedFromCloud]);
 
 
   // Handle setting rate and whatsapp phone updates

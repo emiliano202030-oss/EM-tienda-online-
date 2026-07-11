@@ -174,14 +174,13 @@ export async function saveStateToSupabase(state: AppState): Promise<string | nul
 
   try {
     const timestamp = new Date().toISOString();
-    // Omit products array from JSON blob to avoid conflicts or overwriting the direct table
-    const { products, ...stateWithoutProducts } = state;
+    // Keep the full state (including products) in the JSON blob as a robust fallback to ensure no products are ever lost
     
     const { error } = await supabase
       .from('em_tienda_sync')
       .upsert({
         id: SYNC_ROW_ID,
-        state: stateWithoutProducts,
+        state: state,
         updated_at: timestamp
       });
 
