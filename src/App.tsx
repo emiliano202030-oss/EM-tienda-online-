@@ -256,6 +256,37 @@ export default function App() {
         const localTime = parseDate(stateRef.current?.updatedAt);
         const cloudTime = parseDate(cloudData?.state?.updatedAt || cloudData?.updatedAt);
 
+        // Check if there is local data and whether cloud is empty
+        const hasLocalProducts = stateRef.current.products.length > 0;
+        const hasLocalSales = stateRef.current.sales.length > 0;
+        const hasLocalDebts = stateRef.current.debts.length > 0;
+        const hasLocalData = hasLocalProducts || hasLocalSales || hasLocalDebts;
+
+        const hasCloudProducts = dbProducts !== null && dbProducts.length > 0;
+        const hasCloudState = cloudData !== null;
+        const hasCloudData = hasCloudProducts || hasCloudState;
+
+        // CRITICAL SYNC PROTECTION:
+        // If Supabase is completely empty/uninitialized, but we have local data,
+        // sync local data UP to Supabase instead of wiping out the user's data!
+        if (hasLocalData && !hasCloudData) {
+          console.log('[Supabase Sync] Cloud is empty but local state has data. Initializing Supabase with local state...');
+          
+          // Save state (sales, debts, metadata)
+          await saveStateToSupabase(stateRef.current);
+          
+          // Save all products to postgres table
+          if (stateRef.current.products.length > 0) {
+            for (const prod of stateRef.current.products) {
+              await saveProductToSupabase(prod, true);
+            }
+          }
+          
+          setLastCloudUpdate(new Date().toISOString());
+          setSyncStatus('synced');
+          return; // Retain local state
+        }
+
         let finalProducts = stateRef.current.products;
         let finalSales = stateRef.current.sales;
         let finalDebts = stateRef.current.debts;
@@ -263,18 +294,36 @@ export default function App() {
         let finalWhatsappPhone = stateRef.current.whatsappPhone;
 
         if (cloudData && (localTime === 0 || cloudTime >= localTime)) {
-          // If we found a state in Supabase and it is newer or equal, load it
+          // Cloud is newer or equal: load cloud state
           const loadedState = { ...cloudData.state };
           finalSales = loadedState.sales || [];
           finalDebts = loadedState.debts || [];
           finalExchangeRate = loadedState.exchangeRate || DEFAULT_EXCHANGE_RATE;
           finalWhatsappPhone = loadedState.whatsappPhone || '584120000000';
           finalProducts = loadedState.products || [];
+        } else if (cloudData && localTime > cloudTime) {
+          // Local is newer: push local state to Supabase
+          console.log('[Supabase Sync] Local state is newer. Pushing newer local state to Supabase...');
+          await saveStateToSupabase(stateRef.current);
+          if (stateRef.current.products.length > 0) {
+            for (const prod of stateRef.current.products) {
+              await saveProductToSupabase(prod);
+            }
+          }
+          setLastCloudUpdate(new Date().toISOString());
+          setSyncStatus('synced');
+          return; // Retain local state
         }
 
-        // Direct DB products from postgres take absolute precedence if successfully fetched
+        // Direct DB products from postgres take precedence if successfully fetched and not empty,
+        // or if we loaded an official cloud state.
         if (dbProducts !== null) {
-          finalProducts = dbProducts;
+          if (dbProducts.length > 0) {
+            finalProducts = dbProducts;
+          } else if (cloudData !== null) {
+            // DB is empty, but we loaded state, which means they actually have no products
+            finalProducts = [];
+          }
         }
 
         const loadedState: AppState = {
