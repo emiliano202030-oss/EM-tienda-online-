@@ -1,0 +1,8 @@
+{
+  "name": "EMTIENDA ONLINE2 ",
+  "description": "Plataforma interactiva de punto de venta (POS), control de inventario y gestión de deudores (fiados) con sincronización en la nube y catálogo en línea para clientes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
