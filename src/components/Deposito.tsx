@@ -90,28 +90,6 @@ export default function Deposito({
     setLocalProducts(products);
   }, [products]);
 
-  // Direct .select(*) from productos table
-  useEffect(() => {
-    async function loadDirectProducts() {
-      if (supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('productos')
-            .select('*')
-            .order('nombre', { ascending: true });
-          if (error) {
-            console.error('[Deposito Direct Fetch] Error:', error.message);
-          } else if (data) {
-            setLocalProducts(data.map(mapRowToProduct));
-          }
-        } catch (e) {
-          console.error('[Deposito Direct Fetch] Exception:', e);
-        }
-      }
-    }
-    loadDirectProducts();
-  }, []);
-
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<'Todos' | 'Maquillaje' | 'Cuidado de la piel' | 'Cabello' | 'Hogar' | 'Juguetes para Adultos' | 'Protector Solar' | 'Fajas' | 'Calzado' | 'Brochas y Borlas' | 'Tecnología' | 'Accesorios' | 'Bolsos y carteras' | 'Bolsas y cajas de regalo' | 'Otros'>('Todos');
 
@@ -239,7 +217,10 @@ export default function Deposito({
 
   // Filter products list
   const filteredProducts = localProducts.filter((product) => {
-    const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) || product.sku.includes(searchQuery);
+    const productName = product.name || '';
+    const productSku = product.sku || '';
+    const matchesSearch = productName.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          productSku.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === 'Todos' || product.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });

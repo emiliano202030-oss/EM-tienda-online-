@@ -61,8 +61,10 @@ export default function CajaPOS({ products, exchangeRate, onCompleteSale, onOpen
   // Filter products based on search query, category, and custom modular viewStyle
   const filteredProducts = useMemo(() => {
     return products.filter((product) => {
-      const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                            product.sku.includes(searchQuery);
+      const productName = product.name || '';
+      const productSku = product.sku || '';
+      const matchesSearch = productName.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            productSku.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === 'Todos' || product.category === selectedCategory;
       
       // Let's implement viewStyle visual segregation as specified by user:
@@ -101,7 +103,11 @@ export default function CajaPOS({ products, exchangeRate, onCompleteSale, onOpen
     const cleanSku = manualSkuInput.trim();
     if (!cleanSku) return;
 
-    const matchedProduct = products.find(p => p.sku.toLowerCase() === cleanSku.toLowerCase() || p.id.toLowerCase() === cleanSku.toLowerCase());
+    const matchedProduct = products.find(p => {
+      const pSku = p.sku || '';
+      const pId = p.id || '';
+      return pSku.toLowerCase() === cleanSku.toLowerCase() || pId.toLowerCase() === cleanSku.toLowerCase();
+    });
     if (matchedProduct) {
       handleSimulateQrScan(matchedProduct);
       setManualSkuInput('');
