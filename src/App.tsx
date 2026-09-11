@@ -43,6 +43,9 @@ import {
   isConfiguredViaEnv,
   saveCustomCredentials,
   clearCustomCredentials,
+  cleanUrl,
+  cleanEnvValue,
+  testSupabaseConnection,
   fetchProductsFromSupabase,
   saveProductToSupabase,
   deleteProductFromSupabase,
@@ -236,6 +239,8 @@ export default function App() {
   const [manualKey, setManualKey] = useState(() => {
     return (typeof window !== 'undefined' ? localStorage.getItem('CUSTOM_SUPABASE_ANON_KEY') : '') || '';
   });
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; status: string; message: string; cleanedUrl?: string } | null>(null);
 
   // 1. Initial State Loading from Supabase
   useEffect(() => {
@@ -1516,14 +1521,74 @@ export default function App() {
                           {syncStatus === 'synced' && 'Tus datos están guardados de forma segura en la base de datos Postgres de Supabase. Cualquier cambio en otros dispositivos se reflejará en tiempo real aquí.'}
                           {syncStatus === 'syncing' && 'Guardando o cargando datos del inventario...'}
                           {syncStatus === 'error' && (
-                            <span className="block">
-                              Hubo un error al guardar o recuperar datos. Verifica tus credenciales de Supabase o la estructura de la base de datos.
+                            <div className="space-y-2 mt-1">
+                              <span>Hubo un problema al conectar con tu base de datos de Supabase.</span>
+                              
                               {syncError && (
-                                <span className="block font-mono bg-red-100/80 text-red-900 px-2 py-1.5 rounded-lg text-[9px] mt-1.5 select-all border border-red-200">
-                                  Detalle técnico: {syncError}
-                                </span>
+                                <div className="font-mono bg-red-100/90 text-red-950 px-2.5 py-1.5 rounded-lg text-[9px] select-all border border-red-200">
+                                  <strong>Detalle técnico:</strong> {syncError}
+                                </div>
                               )}
-                            </span>
+
+                              <div className="bg-white/90 border border-red-200 rounded-xl p-2.5 text-[10px] text-slate-700 space-y-1.5 shadow-xs">
+                                <p className="font-bold text-red-900 flex items-center gap-1">
+                                  <span>💡 Causas frecuentes y cómo solucionarlo:</span>
+                                </p>
+                                <ul className="list-disc list-inside space-y-1 text-slate-600 pl-0.5">
+                                  <li>
+                                    <strong>URL incompleta o con error:</strong> Debe ser exactamente <code className="bg-slate-100 px-1 py-0.5 rounded text-violet-800 font-bold">https://[id-proyecto].supabase.co</code> (verifica que no falte el <code>.co</code> ni tenga espacios).
+                                  </li>
+                                  <li>
+                                    <strong>Proyecto Pausado en Supabase:</strong> Si no lo has usado en días, entra a <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="text-violet-600 font-bold underline">supabase.com/dashboard</a> y haz clic en <strong>"Restore Project"</strong>.
+                                  </li>
+                                  <li>
+                                    <strong>ID del Proyecto:</strong> En Supabase ve a <em>Project Settings → API</em> y copia la "Project URL" exacta.
+                                  </li>
+                                </ul>
+
+                                {localStorage.getItem('CUSTOM_SUPABASE_URL') && cleanUrl(localStorage.getItem('CUSTOM_SUPABASE_URL') || '') !== localStorage.getItem('CUSTOM_SUPABASE_URL') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const current = localStorage.getItem('CUSTOM_SUPABASE_URL') || '';
+                                      const fixed = cleanUrl(current);
+                                      localStorage.setItem('CUSTOM_SUPABASE_URL', fixed);
+                                      alert(`¡URL corregida a: ${fixed}!\nRecargando página...`);
+                                      window.location.reload();
+                                    }}
+                                    className="w-full mt-1 py-1.5 px-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-[10px] transition-all flex items-center justify-center gap-1 shadow-xs"
+                                  >
+                                    <Sparkles className="w-3 h-3" />
+                                    Auto-corregir URL guardada y Reconectar
+                                  </button>
+                                )}
+
+                                <div className="flex gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => window.location.reload()}
+                                    className="flex-1 py-1 px-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-bold text-[10px] transition-all flex items-center justify-center gap-1 border border-slate-200"
+                                  >
+                                    <RefreshCw className="w-3 h-3 text-slate-500" />
+                                    Reintentar Conexión
+                                  </button>
+                                  {localStorage.getItem('CUSTOM_SUPABASE_URL') && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (confirm('¿Deseas desconectar Supabase para ingresar las credenciales correctas?')) {
+                                          clearCustomCredentials();
+                                          window.location.reload();
+                                        }
+                                      }}
+                                      className="py-1 px-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg font-bold text-[10px] transition-all border border-red-200"
+                                    >
+                                      Desconectar
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           )}
                           {syncStatus === 'not-configured' && 'Actualmente la app funciona de forma local en este navegador (LocalStorage). Si borras la caché o abres la app en otro celular, no verás los mismos datos.'}
                         </p>
@@ -1562,34 +1627,123 @@ export default function App() {
                     ) : (
                       <div className="space-y-3 text-left">
                         <p className="text-[11px] text-slate-500 leading-relaxed">
-                          La aplicación no tiene variables de entorno configuradas por defecto en el servidor. <strong>¡No te preocupes!</strong> Puedes pegar tus credenciales de Supabase aquí abajo para conectar y sincronizar tu tienda en este dispositivo:
+                          Puedes conectar tu proyecto de Supabase ingresando tus credenciales de abajo. Los datos se guardarán de forma permanente y se sincronizarán con todos tus celulares o computadoras:
                         </p>
                         
-                        <div className="space-y-2">
+                        <div className="space-y-2.5">
                           <div>
-                            <label className="text-[10px] font-bold text-slate-600 block mb-1">SUPABASE URL</label>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[10px] font-bold text-slate-600 block">SUPABASE URL</label>
+                              <span className="text-[9px] text-slate-400">Ej: https://xxxx.supabase.co</span>
+                            </div>
                             <input
                               type="text"
                               placeholder="https://xxxx.supabase.co"
                               value={manualUrl}
-                              onChange={(e) => setManualUrl(e.target.value)}
+                              onChange={(e) => {
+                                setManualUrl(e.target.value);
+                                setTestResult(null);
+                              }}
                               className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-xl bg-white focus:ring-1 focus:ring-violet-500"
                             />
+                            {manualUrl.trim() && (
+                              <div className="flex items-center gap-1 text-[10px] mt-1 text-slate-600 bg-slate-100/80 px-2 py-1 rounded-lg">
+                                <Sparkles className="w-3 h-3 text-violet-600 shrink-0" />
+                                <span>URL detectada:</span>
+                                <span className="font-mono font-bold text-violet-700 select-all break-all">{cleanUrl(manualUrl)}</span>
+                              </div>
+                            )}
                           </div>
                           
                           <div>
-                            <label className="text-[10px] font-bold text-slate-600 block mb-1">SUPABASE ANON KEY</label>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[10px] font-bold text-slate-600 block">SUPABASE ANON KEY / PUBLISHABLE KEY</label>
+                              <span className="text-[9px] text-slate-400">Project Settings → API</span>
+                            </div>
                             <textarea
-                              placeholder="eyJhbGciOi..."
+                              placeholder="eyJhbGciOi... o sb_publishable_..."
                               value={manualKey}
-                              onChange={(e) => setManualKey(e.target.value)}
+                              onChange={(e) => {
+                                setManualKey(e.target.value);
+                                setTestResult(null);
+                              }}
                               rows={2}
                               className="w-full text-[10px] font-mono px-3 py-2 border border-slate-200 rounded-xl bg-white focus:ring-1 focus:ring-violet-500 leading-relaxed"
                             />
                           </div>
                         </div>
 
-                        <div className="flex gap-2 pt-1">
+                        {/* Test connection result banner */}
+                        {testResult && (
+                          <div className={`p-3 rounded-xl border text-xs leading-relaxed space-y-1 ${
+                            testResult.success 
+                              ? testResult.status === 'tables_missing'
+                                ? 'bg-amber-50 text-amber-900 border-amber-200' 
+                                : 'bg-emerald-50 text-emerald-900 border-emerald-200' 
+                              : 'bg-red-50 text-red-900 border-red-200'
+                          }`}>
+                            <div className="font-bold flex items-center gap-1.5">
+                              {testResult.success ? (
+                                testResult.status === 'tables_missing' ? (
+                                  <>
+                                    <Sliders className="w-4 h-4 text-amber-600 shrink-0" />
+                                    <span>Conexión exitosa (Faltan tablas SQL)</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                                    <span>¡Conexión verificada con éxito!</span>
+                                  </>
+                                )
+                              ) : (
+                                <>
+                                  <CloudOff className="w-4 h-4 text-red-600 shrink-0" />
+                                  <span>Error al conectar con Supabase</span>
+                                </>
+                              )}
+                            </div>
+                            <p className="text-[11px]">{testResult.message}</p>
+                          </div>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={testingConnection || !manualUrl.trim() || !manualKey.trim()}
+                            onClick={async () => {
+                              setTestingConnection(true);
+                              setTestResult(null);
+                              try {
+                                const result = await testSupabaseConnection(manualUrl, manualKey);
+                                setTestResult(result);
+                                if (result.cleanedUrl && result.cleanedUrl !== manualUrl) {
+                                  setManualUrl(result.cleanedUrl);
+                                }
+                              } catch (err: any) {
+                                setTestResult({
+                                  success: false,
+                                  status: 'network_error',
+                                  message: err?.message || 'Error inesperado al probar conexión'
+                                });
+                              } finally {
+                                setTestingConnection(false);
+                              }
+                            }}
+                            className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          >
+                            {testingConnection ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin text-violet-600" />
+                                <span>Probando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3.5 h-3.5 text-violet-600" />
+                                <span>Probar Conexión</span>
+                              </>
+                            )}
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => {
@@ -1597,8 +1751,10 @@ export default function App() {
                                 alert('Por favor, ingresa tanto la URL como la Anon Key de Supabase.');
                                 return;
                               }
-                              saveCustomCredentials(manualUrl, manualKey);
-                              alert('¡Credenciales guardadas con éxito! La página se recargará para conectar la base de datos.');
+                              const finalCleanUrl = cleanUrl(manualUrl);
+                              const finalCleanKey = cleanEnvValue(manualKey);
+                              saveCustomCredentials(finalCleanUrl, finalCleanKey);
+                              alert(`¡Credenciales guardadas con éxito!\nURL configurada: ${finalCleanUrl}\n\nLa página se recargará para conectar la base de datos.`);
                               window.location.reload();
                             }}
                             className="flex-1 py-2 bg-violet-600 hover:bg-violet-750 text-white rounded-xl font-bold text-xs shadow-xs transition-all text-center"
@@ -1614,6 +1770,7 @@ export default function App() {
                                   clearCustomCredentials();
                                   setManualUrl('');
                                   setManualKey('');
+                                  setTestResult(null);
                                   alert('Credenciales borradas. La página se recargará.');
                                   window.location.reload();
                                 }

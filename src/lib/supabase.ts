@@ -4,11 +4,12 @@ import { AppState, Product } from '../types';
 // Read public client-side env variables
 const env = (import.meta as any).env || {};
 
-function cleanEnvValue(value: any): string {
+export function cleanEnvValue(value: any): string {
   if (typeof value !== 'string') return '';
-  let cleaned = value.trim();
+  // Remove zero-width spaces or invisible characters
+  let cleaned = value.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
   
-  // If the user pasted the entire line like "VITE_SUPABASE_URL = ...", extract the value after '='
+  // If the user pasted the entire line like "VITE_SUPABASE_ANON_KEY = ...", extract the value after '='
   if (cleaned.includes('=')) {
     const parts = cleaned.split('=');
     cleaned = parts.slice(1).join('=').trim();
@@ -21,17 +22,32 @@ function cleanEnvValue(value: any): string {
   return cleaned;
 }
 
-function cleanUrl(value: any): string {
+export function cleanUrl(value: any): string {
   let cleaned = cleanEnvValue(value);
   if (!cleaned) return '';
   
-  // If the user just pasted the project reference (e.g. "igudusrbuozgmeaaxtjs")
-  const isOnlyAlphanumeric = /^[a-z0-9]{20}$/i.test(cleaned);
+  // Strip zero-width spaces
+  cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+
+  // 1. If user pasted a Supabase dashboard URL, e.g. https://supabase.com/dashboard/project/abcdefghijklmnopqrstuvwxyz
+  const dashboardMatch = cleaned.match(/supabase\.com\/dashboard\/project\/([a-z0-9_-]+)/i);
+  if (dashboardMatch && dashboardMatch[1]) {
+    return `https://${dashboardMatch[1]}.supabase.co`;
+  }
+
+  // 2. If user pasted a subdomain like https://abcdef.supaba... or abcdef.supabase... (with any typos in supabase or missing .co)
+  const subdomainMatch = cleaned.match(/^(?:https?:\/\/)?([a-z0-9_-]+)\.(?:supa[a-z]*|supabase)(?:\.co)?(?:\/.*)?$/i);
+  if (subdomainMatch && subdomainMatch[1]) {
+    return `https://${subdomainMatch[1]}.supabase.co`;
+  }
+
+  // 3. If the user just pasted the project reference (15-35 alphanumeric chars)
+  const isOnlyAlphanumeric = /^[a-z0-9_-]{15,35}$/i.test(cleaned);
   if (isOnlyAlphanumeric) {
     return `https://${cleaned}.supabase.co`;
   }
   
-  // Strip trailing slashes or subpaths
+  // 4. Strip trailing slashes or subpaths like /rest/v1
   if (cleaned.includes('/rest/v1')) {
     cleaned = cleaned.split('/rest/v1')[0];
   }
@@ -40,7 +56,10 @@ function cleanUrl(value: any): string {
     cleaned = cleaned.slice(0, -1);
   }
   
-  // Handle case where user missed '.co' at the end of '.supabase.co' (e.g. ends with '.supabase')
+  // 5. Auto-correct incomplete domain endings like .supabas, .supaba, .supa, .supabase
+  cleaned = cleaned.replace(/\.(supabase|supabas|supaba|supa|sup)(?:\.co)?$/i, '.supabase.co');
+
+  // Handle case where user missed '.co' at the end of '.supabase.co'
   if (cleaned.endsWith('.supabase')) {
     cleaned = cleaned + '.co';
   }
@@ -77,6 +96,14 @@ const rawKey = env.VITE_SUPABASE_ANON_KEY || searchKey || (typeof window !== 'un
 const supabaseUrl = cleanUrl(rawUrl);
 const supabaseAnonKey = cleanEnvValue(rawKey);
 
+// Auto-heal localStorage if the saved URL was malformed (e.g. ended in .supabas)
+if (typeof window !== 'undefined' && supabaseUrl && rawUrl && supabaseUrl !== rawUrl) {
+  try {
+    localStorage.setItem('CUSTOM_SUPABASE_URL', supabaseUrl);
+    console.log('[Supabase Sync] Repaired malformed Supabase URL in localStorage:', supabaseUrl);
+  } catch (e) {}
+}
+
 export const isConfiguredViaEnv = Boolean(
   env.VITE_SUPABASE_URL && 
   env.VITE_SUPABASE_ANON_KEY && 
@@ -94,8 +121,10 @@ export const isSupabaseConfigured = Boolean(
 
 export function saveCustomCredentials(url: string, key: string) {
   if (typeof window !== 'undefined') {
-    localStorage.setItem('CUSTOM_SUPABASE_URL', url);
-    localStorage.setItem('CUSTOM_SUPABASE_ANON_KEY', key);
+    const cleanedUrl = cleanUrl(url);
+    const cleanedKey = cleanEnvValue(key);
+    localStorage.setItem('CUSTOM_SUPABASE_URL', cleanedUrl);
+    localStorage.setItem('CUSTOM_SUPABASE_ANON_KEY', cleanedKey);
   }
 }
 
@@ -103,6 +132,89 @@ export function clearCustomCredentials() {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('CUSTOM_SUPABASE_URL');
     localStorage.removeItem('CUSTOM_SUPABASE_ANON_KEY');
+  }
+}
+
+export async function testSupabaseConnection(
+  url: string,
+  key: string
+): Promise<{
+  success: boolean;
+  status: 'ok' | 'auth_error' | 'network_error' | 'tables_missing' | 'invalid_url';
+  message: string;
+  cleanedUrl: string;
+}> {
+  const cleanedUrl = cleanUrl(url);
+  const cleanedKey = cleanEnvValue(key);
+
+  if (!cleanedUrl || !cleanedUrl.includes('.') || !cleanedUrl.startsWith('http')) {
+    return {
+      success: false,
+      status: 'invalid_url',
+      message: 'La URL no es válida. Debe tener el formato: https://[tu-proyecto].supabase.co',
+      cleanedUrl
+    };
+  }
+
+  if (!cleanedKey) {
+    return {
+      success: false,
+      status: 'auth_error',
+      message: 'Por favor ingresa la Anon Key o Publishable Key de Supabase.',
+      cleanedUrl
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(`${cleanedUrl}/rest/v1/`, {
+      method: 'GET',
+      headers: {
+        apikey: cleanedKey,
+        Authorization: `Bearer ${cleanedKey}`
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        success: false,
+        status: 'auth_error',
+        message: 'Clave no válida (Error 401/403). La Anon Key / Publishable Key ingresada no corresponde a este proyecto.',
+        cleanedUrl
+      };
+    }
+
+    // Check if tables exist
+    const testClient = createClient(cleanedUrl, cleanedKey);
+    const { error: prodError } = await testClient.from('productos').select('id').limit(1);
+
+    if (prodError && (prodError.code === '42P01' || prodError.message?.toLowerCase().includes('does not exist') || prodError.message?.toLowerCase().includes('not find'))) {
+      return {
+        success: true,
+        status: 'tables_missing',
+        message: '¡Servidor de Supabase alcanzado con éxito! Sin embargo, aún no has creado las tablas en tu base de datos. Copia y ejecuta el código SQL que está abajo.',
+        cleanedUrl
+      };
+    }
+
+    return {
+      success: true,
+      status: 'ok',
+      message: '¡Conexión exitosa! Las credenciales y la base de datos están listas para sincronizar.',
+      cleanedUrl
+    };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    return {
+      success: false,
+      status: 'network_error',
+      message: `Error de conexión (${msg}). Posibles causas: 1) El ID del proyecto no existe o tiene un error de tipeo. 2) El proyecto en Supabase está 'Paused' (en pausa por inactividad). 3) Problema de internet o DNS.`,
+      cleanedUrl
+    };
   }
 }
 
